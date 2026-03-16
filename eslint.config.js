@@ -6,7 +6,7 @@ import simpleImportSort from 'eslint-plugin-simple-import-sort';
 import tseslint from 'typescript-eslint';
 import eslintConfigPrettier from 'eslint-config-prettier';
 import { defineConfig, globalIgnores } from 'eslint/config';
-import pixelAgentsPlugin from '../eslint-rules/pixel-agents-rules.mjs';
+import pixelAgentsPlugin from './eslint-rules/pixel-agents-rules.mjs';
 
 export default defineConfig([
   globalIgnores(['dist']),
