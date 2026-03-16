@@ -113,28 +113,19 @@ async function loadCharacterSprites(): Promise<void> {
 
 // ── Floor tiles ─────────────────────────────────────────────────────────
 
-const FLOOR_TILE_SIZE = 16;
-
 async function loadFloorTiles(): Promise<void> {
-  try {
-    const img = await loadImage('./assets/floors.png');
-    const spriteData = pngToSpriteData(img);
-    const sprites: string[][][] = [];
-    const count = Math.floor(img.width / FLOOR_TILE_SIZE);
-    for (let i = 0; i < count; i++) {
-      const tile: string[][] = [];
-      for (let y = 0; y < FLOOR_TILE_SIZE; y++) {
-        const row: string[] = [];
-        for (let x = 0; x < FLOOR_TILE_SIZE; x++) {
-          row.push(spriteData[y]?.[i * FLOOR_TILE_SIZE + x] ?? '');
-        }
-        tile.push(row);
-      }
-      sprites.push(tile);
+  const FLOOR_COUNT = 9;
+  const sprites: string[][][] = [];
+  for (let i = 0; i < FLOOR_COUNT; i++) {
+    try {
+      const img = await loadImage(`./assets/floors/floor_${i}.png`);
+      sprites.push(pngToSpriteData(img));
+    } catch (e) {
+      console.warn(`[AssetLoader] Failed to load floor_${i}.png:`, e);
     }
+  }
+  if (sprites.length > 0) {
     dispatchToWebview({ type: 'floorTilesLoaded', sprites });
-  } catch (e) {
-    console.warn('[AssetLoader] Failed to load floors.png:', e);
   }
 }
 
@@ -147,7 +138,7 @@ const WALL_GRID_ROWS = 4;
 
 async function loadWallTiles(): Promise<void> {
   try {
-    const img = await loadImage('./assets/walls.png');
+    const img = await loadImage('./assets/walls/wall_0.png');
     const spriteData = pngToSpriteData(img);
     // Single wall set: 4x4 grid of 16x32 tiles
     const tiles: string[][][] = [];
@@ -195,27 +186,187 @@ interface FurnitureCatalogEntry {
   frame?: number;
 }
 
+const FURNITURE_FOLDERS = [
+  'BIN', 'BOOKSHELF', 'CACTUS', 'CLOCK', 'COFFEE', 'COFFEE_TABLE',
+  'CUSHIONED_BENCH', 'CUSHIONED_CHAIR', 'DESK', 'DOUBLE_BOOKSHELF',
+  'HANGING_PLANT', 'LARGE_PAINTING', 'LARGE_PLANT', 'PC', 'PLANT',
+  'PLANT_2', 'POT', 'SMALL_PAINTING', 'SMALL_PAINTING_2', 'SMALL_TABLE',
+  'SOFA', 'TABLE_FRONT', 'WHITEBOARD', 'WOODEN_BENCH', 'WOODEN_CHAIR',
+];
+
+interface ManifestNode {
+  type: string;
+  id?: string;
+  name?: string;
+  category?: string;
+  groupType?: string;
+  rotationScheme?: string;
+  canPlaceOnWalls?: boolean;
+  canPlaceOnSurfaces?: boolean;
+  backgroundTiles?: number;
+  file?: string;
+  width?: number;
+  height?: number;
+  footprintW?: number;
+  footprintH?: number;
+  orientation?: string;
+  state?: string;
+  mirrorSide?: boolean;
+  frame?: number;
+  members?: ManifestNode[];
+}
+
+interface GroupContext {
+  groupId: string;
+  category: string;
+  name: string;
+  canPlaceOnWalls: boolean;
+  canPlaceOnSurfaces: boolean;
+  backgroundTiles: number;
+  rotationScheme?: string;
+}
+
+function extractAssets(
+  node: ManifestNode,
+  folderName: string,
+  ctx: GroupContext | null,
+): { entry: FurnitureCatalogEntry; file: string; folder: string }[] {
+  if (node.type === 'asset') {
+    const category = ctx?.category ?? node.category ?? 'misc';
+    const file = node.file ?? `${node.id}.png`;
+    const entry: FurnitureCatalogEntry = {
+      id: node.id ?? folderName,
+      name: ctx?.name ?? node.name ?? node.id ?? folderName,
+      label: ctx?.name ?? node.name ?? node.id ?? folderName,
+      category,
+      file,
+      width: node.width ?? 16,
+      height: node.height ?? 16,
+      footprintW: node.footprintW ?? 1,
+      footprintH: node.footprintH ?? 1,
+      isDesk: category === 'desks',
+      canPlaceOnWalls: ctx?.canPlaceOnWalls ?? node.canPlaceOnWalls ?? false,
+      canPlaceOnSurfaces: ctx?.canPlaceOnSurfaces ?? node.canPlaceOnSurfaces ?? false,
+      backgroundTiles: ctx?.backgroundTiles ?? node.backgroundTiles ?? 0,
+      ...(ctx?.groupId && { groupId: ctx.groupId }),
+      ...(node.orientation && { orientation: node.orientation }),
+      ...(node.state && { state: node.state }),
+      ...(node.mirrorSide && { mirrorSide: node.mirrorSide }),
+      ...(ctx?.rotationScheme && { rotationScheme: ctx.rotationScheme }),
+      ...(node.frame != null && { frame: node.frame }),
+    };
+    return [{ entry, file, folder: folderName }];
+  }
+
+  if (node.type === 'group' && node.members) {
+    const groupCtx: GroupContext = {
+      groupId: ctx?.groupId ?? node.id ?? folderName,
+      category: ctx?.category ?? node.category ?? 'misc',
+      name: ctx?.name ?? node.name ?? folderName,
+      canPlaceOnWalls: ctx?.canPlaceOnWalls ?? node.canPlaceOnWalls ?? false,
+      canPlaceOnSurfaces: ctx?.canPlaceOnSurfaces ?? node.canPlaceOnSurfaces ?? false,
+      backgroundTiles: ctx?.backgroundTiles ?? node.backgroundTiles ?? 0,
+      rotationScheme: ctx?.rotationScheme ?? node.rotationScheme,
+    };
+
+    // For animation groups, propagate the animation group id
+    const childCtx: GroupContext = { ...groupCtx };
+    if (node.groupType === 'animation') {
+      // Children inherit the animation group context
+    }
+
+    const results: { entry: FurnitureCatalogEntry; file: string; folder: string }[] = [];
+    for (const member of node.members) {
+      // Propagate state from parent state group to children
+      const memberWithState: ManifestNode =
+        node.groupType === 'state' && !member.state ? member : member;
+      results.push(...extractAssets(memberWithState, folderName, childCtx));
+    }
+
+    // Tag animation group entries
+    if (node.groupType === 'animation' && node.state) {
+      for (const r of results) {
+        if (!r.entry.state) r.entry.state = node.state;
+        r.entry.animationGroup = `${groupCtx.groupId}_${node.state}`;
+      }
+    }
+
+    return results;
+  }
+
+  return [];
+}
+
 async function loadFurniture(): Promise<void> {
   try {
-    const res = await fetch('./assets/furniture-catalog.json');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const catalog = (await res.json()) as FurnitureCatalogEntry[];
-
-    // Load all furniture sprites in parallel
+    const catalog: FurnitureCatalogEntry[] = [];
     const sprites: Record<string, string[][]> = {};
-    const loadPromises = catalog.map(async (entry) => {
-      try {
-        const img = await loadImage(`./assets/furniture/${entry.file}`);
-        sprites[entry.id] = pngToSpriteData(img);
-      } catch (e) {
-        console.warn(`[AssetLoader] Failed to load furniture ${entry.file}:`, e);
+
+    // Load all manifests in parallel
+    const manifestResults = await Promise.all(
+      FURNITURE_FOLDERS.map(async (folder) => {
+        try {
+          const res = await fetch(`./assets/furniture/${folder}/manifest.json`);
+          if (!res.ok) return null;
+          const manifest = (await res.json()) as ManifestNode;
+          return { folder, manifest };
+        } catch {
+          console.warn(`[AssetLoader] Failed to load manifest for ${folder}`);
+          return null;
+        }
+      }),
+    );
+
+    // Extract all catalog entries
+    const allAssets: { entry: FurnitureCatalogEntry; file: string; folder: string }[] = [];
+    for (const result of manifestResults) {
+      if (!result) continue;
+      const { folder, manifest } = result;
+
+      if (manifest.type === 'asset') {
+        // Simple item — treat the manifest itself as the entry
+        const file = manifest.file ?? `${manifest.id ?? folder}.png`;
+        const category = manifest.category ?? 'misc';
+        catalog.push({
+          id: manifest.id ?? folder,
+          name: manifest.name ?? folder,
+          label: manifest.name ?? folder,
+          category,
+          file,
+          width: manifest.width ?? 16,
+          height: manifest.height ?? 16,
+          footprintW: manifest.footprintW ?? 1,
+          footprintH: manifest.footprintH ?? 1,
+          isDesk: category === 'desks',
+          canPlaceOnWalls: manifest.canPlaceOnWalls ?? false,
+          canPlaceOnSurfaces: manifest.canPlaceOnSurfaces ?? false,
+          backgroundTiles: manifest.backgroundTiles ?? 0,
+        });
+        allAssets.push({ entry: catalog[catalog.length - 1], file, folder });
+      } else {
+        const extracted = extractAssets(manifest, folder, null);
+        for (const a of extracted) {
+          catalog.push(a.entry);
+          allAssets.push(a);
+        }
       }
-    });
-    await Promise.all(loadPromises);
+    }
+
+    // Load all sprites in parallel
+    await Promise.all(
+      allAssets.map(async ({ entry, file, folder }) => {
+        try {
+          const img = await loadImage(`./assets/furniture/${folder}/${file}`);
+          sprites[entry.id] = pngToSpriteData(img);
+        } catch (e) {
+          console.warn(`[AssetLoader] Failed to load furniture ${folder}/${file}:`, e);
+        }
+      }),
+    );
 
     dispatchToWebview({ type: 'furnitureAssetsLoaded', catalog, sprites });
   } catch (e) {
-    console.warn('[AssetLoader] Failed to load furniture catalog:', e);
+    console.warn('[AssetLoader] Failed to load furniture:', e);
   }
 }
 
@@ -223,7 +374,7 @@ async function loadFurniture(): Promise<void> {
 
 async function loadDefaultLayout(): Promise<Record<string, unknown> | null> {
   try {
-    const res = await fetch('./assets/default-layout.json');
+    const res = await fetch('./assets/default-layout-1.json');
     if (!res.ok) return null;
     return (await res.json()) as Record<string, unknown>;
   } catch {
