@@ -1,113 +1,156 @@
 /**
  * OpenClaw Gateway API client.
- * Connects via HTTP + WebSocket to the OpenClaw gateway for real-time agent events.
+ * Uses the /tools/invoke HTTP endpoint to query sessions and history.
+ * Polls for changes instead of WebSocket (gateway WS requires complex handshake).
  */
 
-const GATEWAY_URL = import.meta.env.VITE_OPENCLAW_GATEWAY_URL ?? 'http://localhost:3117';
+const GATEWAY_URL = import.meta.env.VITE_OPENCLAW_GATEWAY_URL ?? 'http://localhost:18789';
 const GATEWAY_TOKEN = import.meta.env.VITE_OPENCLAW_GATEWAY_TOKEN ?? '';
+const POLL_INTERVAL = Number(import.meta.env.VITE_OPENCLAW_POLL_INTERVAL ?? 5000);
 
-function headers(): Record<string, string> {
-  const h: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (GATEWAY_TOKEN) h['Authorization'] = `Bearer ${GATEWAY_TOKEN}`;
-  return h;
+// ── Generic tool invoke ─────────────────────────────────────────────────
+
+interface ToolInvokeResponse {
+  ok: boolean;
+  result?: {
+    content: Array<{ type: string; text?: string }>;
+    details?: Record<string, unknown>;
+  };
+  error?: { message: string; type: string };
 }
 
-// ── HTTP endpoints ──────────────────────────────────────────────────────
+async function toolInvoke(
+  tool: string,
+  args: Record<string, unknown> = {},
+  sessionKey?: string,
+): Promise<ToolInvokeResponse> {
+  const body: Record<string, unknown> = { tool, args };
+  if (sessionKey) body.sessionKey = sessionKey;
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (GATEWAY_TOKEN) headers['Authorization'] = `Bearer ${GATEWAY_TOKEN}`;
+
+  const res = await fetch(`${GATEWAY_URL}/tools/invoke`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`tools/invoke ${tool} failed (${res.status}): ${text}`);
+  }
+
+  return (await res.json()) as ToolInvokeResponse;
+}
+
+// ── Session types ───────────────────────────────────────────────────────
 
 export interface OpenClawSession {
   key: string;
   kind: string;
-  status: string;
+  channel?: string;
+  displayName?: string;
+  updatedAt?: number;
+  sessionId?: string;
+  model?: string;
+  totalTokens?: number;
+  lastChannel?: string;
+  transcriptPath?: string;
   parentKey?: string;
-  metadata?: Record<string, unknown>;
 }
 
-export interface OpenClawHistoryEntry {
-  type: string;
-  data: Record<string, unknown>;
+export interface OpenClawHistoryMessage {
+  role: string;
+  content: unknown;
   timestamp?: string;
 }
 
-export async function fetchSessions(): Promise<OpenClawSession[]> {
-  const res = await fetch(`${GATEWAY_URL}/api/sessions`, { headers: headers() });
-  if (!res.ok) throw new Error(`GET /api/sessions failed: ${res.status}`);
-  return (await res.json()) as OpenClawSession[];
+// ── API wrappers ────────────────────────────────────────────────────────
+
+export async function listSessions(
+  limit = 20,
+  activeMinutes?: number,
+): Promise<OpenClawSession[]> {
+  const args: Record<string, unknown> = { limit, messageLimit: 0 };
+  if (activeMinutes) args.activeMinutes = activeMinutes;
+
+  const resp = await toolInvoke('sessions_list', args);
+  if (!resp.ok || !resp.result?.details) return [];
+
+  const details = resp.result.details as { sessions?: OpenClawSession[] };
+  return details.sessions ?? [];
 }
 
-export async function fetchSessionHistory(key: string): Promise<OpenClawHistoryEntry[]> {
-  const res = await fetch(`${GATEWAY_URL}/api/sessions/${encodeURIComponent(key)}/history`, {
-    headers: headers(),
+export async function getSessionHistory(
+  sessionKey: string,
+  limit = 30,
+  includeTools = true,
+): Promise<OpenClawHistoryMessage[]> {
+  const resp = await toolInvoke('sessions_history', {
+    sessionKey,
+    limit,
+    includeTools,
   });
-  if (!res.ok) throw new Error(`GET /api/sessions/${key}/history failed: ${res.status}`);
-  return (await res.json()) as OpenClawHistoryEntry[];
+  if (!resp.ok || !resp.result?.details) return [];
+
+  const details = resp.result.details;
+  // sessions_history returns messages array
+  if (Array.isArray(details)) return details as OpenClawHistoryMessage[];
+  if (Array.isArray((details as Record<string, unknown>).messages)) {
+    return (details as Record<string, unknown>).messages as OpenClawHistoryMessage[];
+  }
+  return [];
 }
 
-// ── WebSocket ───────────────────────────────────────────────────────────
+// ── Polling-based connection ────────────────────────────────────────────
 
-export type WsEventHandler = (event: Record<string, unknown>) => void;
+export type SessionUpdateHandler = (sessions: OpenClawSession[]) => void;
 
-export interface OpenClawConnection {
-  /** Close the WebSocket */
-  close(): void;
-  /** Whether the WebSocket is currently connected */
+export interface OpenClawPoller {
+  start(): void;
+  stop(): void;
+  poll(): Promise<void>;
   readonly connected: boolean;
 }
 
-/**
- * Connect to the gateway WebSocket for real-time session events.
- * Auto-reconnects with exponential backoff.
- */
-export function connectWebSocket(
-  onEvent: WsEventHandler,
+export function createPoller(
+  onUpdate: SessionUpdateHandler,
   onStatusChange?: (connected: boolean) => void,
-): OpenClawConnection {
-  let ws: WebSocket | null = null;
-  let alive = true;
-  let backoff = 1000;
+): OpenClawPoller {
+  let timer: ReturnType<typeof setInterval> | null = null;
   let connected = false;
 
-  function connect() {
-    if (!alive) return;
-
-    const wsUrl = GATEWAY_URL.replace(/^http/, 'ws') + '/ws';
-    const url = GATEWAY_TOKEN ? `${wsUrl}?token=${encodeURIComponent(GATEWAY_TOKEN)}` : wsUrl;
-    ws = new WebSocket(url);
-
-    ws.onopen = () => {
-      backoff = 1000;
-      connected = true;
-      onStatusChange?.(true);
-    };
-
-    ws.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data as string) as Record<string, unknown>;
-        onEvent(data);
-      } catch {
-        console.warn('[OpenClaw WS] Failed to parse message:', e.data);
+  async function doPoll() {
+    try {
+      const sessions = await listSessions(50, 120);
+      if (!connected) {
+        connected = true;
+        onStatusChange?.(true);
       }
-    };
-
-    ws.onclose = () => {
-      connected = false;
-      onStatusChange?.(false);
-      if (alive) {
-        setTimeout(connect, backoff);
-        backoff = Math.min(backoff * 2, 30000);
+      onUpdate(sessions);
+    } catch (err) {
+      console.warn('[OpenClaw] Poll failed:', err);
+      if (connected) {
+        connected = false;
+        onStatusChange?.(false);
       }
-    };
-
-    ws.onerror = () => {
-      ws?.close();
-    };
+    }
   }
 
-  connect();
-
   return {
-    close() {
-      alive = false;
-      ws?.close();
+    start() {
+      doPoll(); // immediate first poll
+      timer = setInterval(doPoll, POLL_INTERVAL);
+    },
+    stop() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    },
+    async poll() {
+      await doPoll();
     },
     get connected() {
       return connected;
