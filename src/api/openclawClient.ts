@@ -5,11 +5,11 @@
  */
 
 // In dev mode, use relative URL so requests go through Vite's proxy (avoids CORS).
-// In production, use the configured gateway URL directly.
-const GATEWAY_URL = import.meta.env.DEV
-  ? ''
-  : (import.meta.env.VITE_OPENCLAW_GATEWAY_URL ?? 'http://localhost:18789');
-const GATEWAY_TOKEN = import.meta.env.VITE_OPENCLAW_GATEWAY_TOKEN ?? '';
+// The proxy injects the auth token, so the browser never needs it.
+// In production, use the configured gateway URL and token directly.
+const IS_DEV = import.meta.env.DEV;
+const GATEWAY_URL = IS_DEV ? '' : (import.meta.env.VITE_OPENCLAW_GATEWAY_URL ?? 'http://localhost:18789');
+const GATEWAY_TOKEN = IS_DEV ? '' : (import.meta.env.VITE_OPENCLAW_GATEWAY_TOKEN ?? '');
 const POLL_INTERVAL = Number(import.meta.env.VITE_OPENCLAW_POLL_INTERVAL ?? 5000);
 
 // ── Generic tool invoke ─────────────────────────────────────────────────
