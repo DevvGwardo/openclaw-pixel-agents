@@ -4,7 +4,11 @@
  * Polls for changes instead of WebSocket (gateway WS requires complex handshake).
  */
 
-const GATEWAY_URL = import.meta.env.VITE_OPENCLAW_GATEWAY_URL ?? 'http://localhost:18789';
+// In dev mode, use relative URL so requests go through Vite's proxy (avoids CORS).
+// In production, use the configured gateway URL directly.
+const GATEWAY_URL = import.meta.env.DEV
+  ? ''
+  : (import.meta.env.VITE_OPENCLAW_GATEWAY_URL ?? 'http://localhost:18789');
 const GATEWAY_TOKEN = import.meta.env.VITE_OPENCLAW_GATEWAY_TOKEN ?? '';
 const POLL_INTERVAL = Number(import.meta.env.VITE_OPENCLAW_POLL_INTERVAL ?? 5000);
 
