@@ -1,4 +1,4 @@
-# CI workflow for pixel-agents
+# CI workflow for openclaw-pixel-agents
 
 name: CI
 
@@ -32,77 +32,45 @@ jobs:
       - name: Checkout
         id: checkout
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
       - name: Setup Node
         id: setup_node
         uses: actions/setup-node@v6
         with:
-          node-version-file: .nvmrc
+          node-version: 22
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            webview-ui/package-lock.json
 
-      - name: Install Root Dependencies
-        id: install_root
-        run: npm ci
-
-      - name: Install Webview Dependencies
-        id: install_webview
-        working-directory: webview-ui
+      - name: Install Dependencies
+        id: install
         run: npm ci
 
       # --- Quality Checks (blocking) ---
 
       - name: Type Check
         id: type_check
-        if: always() && steps.install_root.outcome == 'success'
-        run: npm run check-types
+        if: always() && steps.install.outcome == 'success'
+        run: npx tsc -b
         continue-on-error: true
 
-      - name: Root Lint
-        id: root_lint
-        if: always() && steps.install_root.outcome == 'success'
+      - name: Lint
+        id: lint
+        if: always() && steps.install.outcome == 'success'
         run: npm run lint
-        continue-on-error: true
-
-      - name: Webview Lint
-        id: webview_lint
-        if: always() && steps.install_webview.outcome == 'success'
-        working-directory: webview-ui
-        run: npm run lint
-        continue-on-error: true
-
-      - name: Format Check
-        id: format_check
-        if: always() && steps.install_root.outcome == 'success'
-        run: npm run format:check
         continue-on-error: true
 
       # --- Build (blocking) ---
 
       - name: Build
         id: build
-        if: always() && steps.install_root.outcome == 'success' && steps.install_webview.outcome == 'success'
-        run: |
-          node esbuild.js
-          cd webview-ui && npm run build
+        if: always() && steps.install.outcome == 'success'
+        run: npx vite build
         continue-on-error: true
 
       # --- Advisory Checks (non-blocking) ---
 
-      - name: Audit Root Dependencies
-        id: audit_root
-        if: always() && steps.install_root.outcome == 'success'
-        run: npm audit --audit-level=high
-        continue-on-error: true
-
-      - name: Audit Webview Dependencies
-        id: audit_webview
-        if: always() && steps.install_webview.outcome == 'success'
-        working-directory: webview-ui
+      - name: Audit Dependencies
+        id: audit
+        if: always() && steps.install.outcome == 'success'
         run: npm audit --audit-level=high
         continue-on-error: true
 
@@ -113,15 +81,11 @@ jobs:
         env:
           CHECKOUT: ${{ steps.checkout.outcome }}
           SETUP_NODE: ${{ steps.setup_node.outcome }}
-          INSTALL_ROOT: ${{ steps.install_root.outcome }}
-          INSTALL_WEBVIEW: ${{ steps.install_webview.outcome }}
+          INSTALL: ${{ steps.install.outcome }}
           TYPE_CHECK: ${{ steps.type_check.outcome }}
-          ROOT_LINT: ${{ steps.root_lint.outcome }}
-          WEBVIEW_LINT: ${{ steps.webview_lint.outcome }}
-          FORMAT_CHECK: ${{ steps.format_check.outcome }}
+          LINT: ${{ steps.lint.outcome }}
           BUILD: ${{ steps.build.outcome }}
-          AUDIT_ROOT: ${{ steps.audit_root.outcome }}
-          AUDIT_WEBVIEW: ${{ steps.audit_webview.outcome }}
+          AUDIT: ${{ steps.audit.outcome }}
         run: |
           status() {
             if [ "$1" = "success" ]; then echo "✅ PASS"; else echo "❌ FAIL"; fi
@@ -133,15 +97,11 @@ jobs:
             echo "| --- | --- |"
             echo "| Checkout | $(status "$CHECKOUT") |"
             echo "| Setup Node | $(status "$SETUP_NODE") |"
-            echo "| Install root deps | $(status "$INSTALL_ROOT") |"
-            echo "| Install webview deps | $(status "$INSTALL_WEBVIEW") |"
+            echo "| Install deps | $(status "$INSTALL") |"
             echo "| **Type check** | $(status "$TYPE_CHECK") |"
-            echo "| **Root lint** | $(status "$ROOT_LINT") |"
-            echo "| **Webview lint** | $(status "$WEBVIEW_LINT") |"
-            echo "| **Format check** | $(status "$FORMAT_CHECK") |"
+            echo "| **Lint** | $(status "$LINT") |"
             echo "| **Build** | $(status "$BUILD") |"
-            echo "| Audit root _(advisory)_ | $(status "$AUDIT_ROOT") |"
-            echo "| Audit webview _(advisory)_ | $(status "$AUDIT_WEBVIEW") |"
+            echo "| Audit _(advisory)_ | $(status "$AUDIT") |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # --- Final Gate ---
@@ -151,18 +111,13 @@ jobs:
         env:
           CHECKOUT: ${{ steps.checkout.outcome }}
           SETUP_NODE: ${{ steps.setup_node.outcome }}
-          INSTALL_ROOT: ${{ steps.install_root.outcome }}
-          INSTALL_WEBVIEW: ${{ steps.install_webview.outcome }}
+          INSTALL: ${{ steps.install.outcome }}
           TYPE_CHECK: ${{ steps.type_check.outcome }}
-          ROOT_LINT: ${{ steps.root_lint.outcome }}
-          WEBVIEW_LINT: ${{ steps.webview_lint.outcome }}
-          FORMAT_CHECK: ${{ steps.format_check.outcome }}
+          LINT: ${{ steps.lint.outcome }}
           BUILD: ${{ steps.build.outcome }}
         run: |
           failed=0
-          for step in CHECKOUT SETUP_NODE INSTALL_ROOT INSTALL_WEBVIEW \
-                      TYPE_CHECK ROOT_LINT WEBVIEW_LINT FORMAT_CHECK \
-                      BUILD; do
+          for step in CHECKOUT SETUP_NODE INSTALL TYPE_CHECK LINT BUILD; do
             eval "val=\$$step"
             if [ "$val" != "success" ]; then
               echo "::error::$step failed"
