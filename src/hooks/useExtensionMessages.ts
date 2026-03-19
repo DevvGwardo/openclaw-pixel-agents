@@ -51,6 +51,7 @@ export interface ExtensionMessageState {
   selectedAgent: number | null;
   agentTools: Record<number, ToolActivity[]>;
   agentStatuses: Record<number, string>;
+  agentModels: Record<number, string>;
   subagentTools: Record<number, Record<string, ToolActivity[]>>;
   subagentCharacters: SubagentCharacter[];
   layoutReady: boolean;
@@ -88,9 +89,15 @@ export function useExtensionMessages(
     { catalog: FurnitureAsset[]; sprites: Record<string, string[][]> } | undefined
   >();
   const [workspaceFolders, setWorkspaceFolders] = useState<WorkspaceFolder[]>([]);
+  const [agentModels, setAgentModels] = useState<Record<number, string>>({});
 
   // Track whether initial layout has been loaded (ref to avoid re-render)
   const layoutReadyRef = useRef(false);
+
+  // Buffer subagentToolStart events that arrive before the subagent character exists
+  const pendingSubagentTools = useRef<
+    Map<number, Array<{ toolId: string; parentToolId: string; status: string }>>
+  >(new Map());
 
   useEffect(() => {
     // Buffer agents from existingAgents until layout is loaded
@@ -201,6 +208,7 @@ export function useExtensionMessages(
           }
           return merged.sort((a, b) => a - b);
         });
+        setAgentModels(agentModels);
       } else if (msg.type === 'agentToolStart') {
         const id = msg.id as number;
         const toolId = msg.toolId as string;
@@ -223,6 +231,18 @@ export function useExtensionMessages(
             if (prev.some((s) => s.id === subId)) return prev;
             return [...prev, { id: subId, parentAgentId: id, parentToolId: toolId, label }];
           });
+          // Flush any subagentToolStart events that arrived before the character was created
+          const buffered = pendingSubagentTools.current.get(id);
+          if (buffered) {
+            for (const pending of buffered) {
+              if (pending.parentToolId === toolId) {
+                const subToolName = extractToolName(pending.status);
+                os.setAgentTool(subId, subToolName);
+                os.setAgentActive(subId, true);
+              }
+            }
+            pendingSubagentTools.current.delete(id);
+          }
         }
       } else if (msg.type === 'agentToolDone') {
         const id = msg.id as number;
@@ -335,6 +355,13 @@ export function useExtensionMessages(
           const subToolName = extractToolName(status);
           os.setAgentTool(subId, subToolName);
           os.setAgentActive(subId, true);
+        } else {
+          // Buffer the event — the subagent character doesn't exist yet (race condition
+          // between session detection and history polling). Flush it once the character is created.
+          if (!pendingSubagentTools.current.has(id)) {
+            pendingSubagentTools.current.set(id, []);
+          }
+          pendingSubagentTools.current.get(id)!.push({ toolId, parentToolId, status });
         }
       } else if (msg.type === 'subagentToolDone') {
         const id = msg.id as number;
@@ -418,6 +445,7 @@ export function useExtensionMessages(
     selectedAgent,
     agentTools,
     agentStatuses,
+    agentModels,
     subagentTools,
     subagentCharacters,
     layoutReady,

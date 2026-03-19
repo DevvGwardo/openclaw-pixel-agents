@@ -759,12 +759,18 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
     if (!currentKeys.has(key)) {
       const id = sessionToAgent.get(key);
       if (id !== undefined) {
-        // Close any pooled idle subagents for this parent (non-subagent sessions only)
-        if (!key.includes(':subagent:')) {
+        const isSubagent = key.includes(':subagent:');
+
+        if (!isSubagent) {
+          // Close any pooled idle subagents for this parent — use agentFullyClosed
+          // so the hook calls os.removeAllSubagents AND os.removeAgent, fully
+          // removing each pooled subagent character from officeState.  Pooled
+          // subagents have no :subagent: key so they are never in idleSubagentPool
+          // of another pooled subagent, avoiding any double-dispatch risk.
           const pool = idleSubagentPool.get(id);
           if (pool) {
             for (const subId of pool) {
-              dispatchToWebview({ type: 'agentClosed', id: subId });
+              dispatchToWebview({ type: 'agentFullyClosed', id: subId });
               agentLastActivity.delete(subId);
               agentLastStatus.delete(subId);
               subagentParent.delete(subId);
@@ -773,18 +779,27 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
           }
         } else {
           // Subagent session removed — clean up any nested sub-subagents this
-          // subagent may have created, and dispatch subagentClear for all of them.
+          // subagent may have created.  Use agentFullyClosed (instead of
+          // subagentClear + agentClosed) so the hook calls os.removeAllSubagents
+          // AND os.removeAgent for each nested sub-subagent, correctly removing
+          // the character from officeState without needing a separate subagentClear.
+          // This also avoids a race where a nested sub-subagent's own session
+          // ends before this subagent's session — agentFullyClosed handles it.
           const nestedSubagentIds: number[] = [];
           for (const [subId, parentId] of subagentParent) {
             if (parentId === id) nestedSubagentIds.push(subId);
           }
           for (const nestedId of nestedSubagentIds) {
-            dispatchToWebview({ type: 'subagentClear', id: nestedId });
-            dispatchToWebview({ type: 'agentClosed', id: nestedId });
+            dispatchToWebview({ type: 'agentFullyClosed', id: nestedId });
             agentLastActivity.delete(nestedId);
             agentLastStatus.delete(nestedId);
             subagentParent.delete(nestedId);
           }
+          // Also use agentFullyClosed for the subagent itself so the hook calls
+          // os.removeAllSubagents (cleans up sub-subagents) AND os.removeAgent
+          // (removes the subagent character from officeState).  The plain
+          // agentClosed that follows only cleans tracking state.
+          dispatchToWebview({ type: 'agentFullyClosed', id });
         }
         dispatchToWebview({ type: 'agentClosed', id });
         sessionToAgent.delete(key);
