@@ -178,6 +178,36 @@ export function useExtensionMessages(
         os.removeAllSubagents(id);
         setSubagentCharacters((prev) => prev.filter((s) => s.parentAgentId !== id));
         os.removeAgent(id);
+      } else if (msg.type === 'agentFullyClosed') {
+        // Like agentClosed but guarantees os.removeAgent is called.
+        // Use for: (a) pooled idle subagents of a closing parent, and
+        // (b) subagent sessions — in both cases the subagent character
+        // must be explicitly removed from officeState.
+        const id = msg.id as number;
+        onEvent?.(`Agent #${id} left`);
+        setAgents((prev) => prev.filter((a) => a !== id));
+        setSelectedAgent((prev) => (prev === id ? null : prev));
+        setAgentTools((prev) => {
+          if (!(id in prev)) return prev;
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        setAgentStatuses((prev) => {
+          if (!(id in prev)) return prev;
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        setSubagentTools((prev) => {
+          if (!(id in prev)) return prev;
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        os.removeAllSubagents(id);
+        setSubagentCharacters((prev) => prev.filter((s) => s.parentAgentId !== id));
+        os.removeAgent(id);
       } else if (msg.type === 'existingAgents') {
         const incoming = msg.agents as number[];
         const meta = (msg.agentMeta || {}) as Record<
