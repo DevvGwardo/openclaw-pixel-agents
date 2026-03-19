@@ -777,6 +777,20 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
             }
             idleSubagentPool.delete(id);
           }
+        } else {
+          // Subagent session removed — clean up any nested sub-subagents this
+          // subagent may have created, and dispatch subagentClear for all of them.
+          const nestedSubagentIds: number[] = [];
+          for (const [subId, parentId] of subagentParent) {
+            if (parentId === id) nestedSubagentIds.push(subId);
+          }
+          for (const nestedId of nestedSubagentIds) {
+            dispatchToWebview({ type: 'subagentClear', id: nestedId });
+            dispatchToWebview({ type: 'agentClosed', id: nestedId });
+            agentLastActivity.delete(nestedId);
+            agentLastStatus.delete(nestedId);
+            subagentParent.delete(nestedId);
+          }
         }
         dispatchToWebview({ type: 'agentClosed', id });
         sessionToAgent.delete(key);
