@@ -481,19 +481,26 @@ export class OfficeState {
       seat.assigned = true;
       ch = createCharacter(id, palette, bestSeatId, seat, hueShift);
     } else {
-      // No seats — spawn at closest walkable tile to parent
-      let spawn = { col: 1, row: 1 };
+      // No seats — spawn at the closest unoccupied walkable tile to parent
+      let spawn: { col: number; row: number } | null = null;
       if (this.walkableTiles.length > 0) {
-        let closest = this.walkableTiles[0];
-        let closestDist = dist(closest.col, closest.row);
-        for (let i = 1; i < this.walkableTiles.length; i++) {
-          const d = dist(this.walkableTiles[i].col, this.walkableTiles[i].row);
-          if (d < closestDist) {
-            closest = this.walkableTiles[i];
-            closestDist = d;
+        // Sort walkable tiles by distance to parent, then iterate in order
+        const sorted = [...this.walkableTiles].sort(
+          (a, b) => dist(a.col, a.row) - dist(b.col, b.row),
+        );
+        for (const tile of sorted) {
+          const occupied = Array.from(this.characters.values()).some(
+            (ch) => ch.tileCol === tile.col && ch.tileRow === tile.row,
+          );
+          if (!occupied) {
+            spawn = tile;
+            break;
           }
         }
-        spawn = closest;
+        // Fall back to (1,1) if every walkable tile is occupied
+        if (!spawn) spawn = { col: 1, row: 1 };
+      } else {
+        spawn = { col: 1, row: 1 };
       }
       ch = createCharacter(id, palette, null, null, hueShift);
       ch.x = spawn.col * TILE_SIZE + TILE_SIZE / 2;
