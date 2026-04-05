@@ -1,3 +1,4 @@
+import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv } from 'vite';
 
@@ -7,7 +8,7 @@ export default defineConfig(({ mode }) => {
   const gatewayToken = env.VITE_OPENCLAW_GATEWAY_TOKEN || '';
 
   return {
-    plugins: [react()],
+    plugins: [react(), tailwindcss()],
     build: {
       outDir: 'dist',
       emptyOutDir: true,

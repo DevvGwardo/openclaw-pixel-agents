@@ -58,6 +58,12 @@ export interface ExtensionMessageState {
   layoutWasReset: boolean;
   loadedAssets?: { catalog: FurnitureAsset[]; sprites: Record<string, string[][]> };
   workspaceFolders: WorkspaceFolder[];
+  externalAssetDirectories: string[];
+  lastSeenVersion: string;
+  extensionVersion: string;
+  watchAllSessions: boolean;
+  setWatchAllSessions: (v: boolean) => void;
+  alwaysShowLabels: boolean;
 }
 
 function saveAgentSeats(os: OfficeState): void {
@@ -90,6 +96,11 @@ export function useExtensionMessages(
   >();
   const [workspaceFolders, setWorkspaceFolders] = useState<WorkspaceFolder[]>([]);
   const [agentModels, setAgentModels] = useState<Record<number, string>>({});
+  const [externalAssetDirectories, setExternalAssetDirectories] = useState<string[]>([]);
+  const [lastSeenVersion, setLastSeenVersion] = useState('');
+  const [extensionVersion, setExtensionVersion] = useState('');
+  const [watchAllSessions, setWatchAllSessions] = useState(false);
+  const [alwaysShowLabels, setAlwaysShowLabels] = useState(false);
 
   // Track whether initial layout has been loaded (ref to avoid re-render)
   const layoutReadyRef = useRef(false);
@@ -248,14 +259,14 @@ export function useExtensionMessages(
           if (list.some((t) => t.toolId === toolId)) return prev;
           return { ...prev, [id]: [...list, { toolId, status, done: false }] };
         });
-        const toolName = extractToolName(status);
+        const toolName = (msg.toolName as string | undefined) ?? extractToolName(status);
         os.setAgentTool(id, toolName);
         os.setAgentActive(id, true);
         os.clearPermissionBubble(id);
         onEvent?.(`#${id} using ${toolName}`);
-        // Create sub-agent character for Task tool subtasks
-        if (status.startsWith('Subtask:')) {
-          const label = status.slice('Subtask:'.length).trim();
+        // Create sub-agent character for Task/Agent tool subtasks
+        if (toolName === 'Task' || toolName === 'Agent' || status.startsWith('Subtask:')) {
+          const label = status.startsWith('Subtask:') ? status.slice('Subtask:'.length).trim() : '';
           const subId = os.addSubagent(id, toolId);
           setSubagentCharacters((prev) => {
             if (prev.some((s) => s.id === subId)) return prev;
@@ -463,6 +474,25 @@ export function useExtensionMessages(
       } else if (msg.type === 'settingsLoaded') {
         const soundOn = msg.soundEnabled as boolean;
         setSoundEnabled(soundOn);
+        if (typeof msg.watchAllSessions === 'boolean') {
+          setWatchAllSessions(msg.watchAllSessions as boolean);
+        }
+        if (typeof msg.alwaysShowLabels === 'boolean') {
+          setAlwaysShowLabels(msg.alwaysShowLabels as boolean);
+        }
+        if (Array.isArray(msg.externalAssetDirectories)) {
+          setExternalAssetDirectories(msg.externalAssetDirectories as string[]);
+        }
+        if (typeof msg.lastSeenVersion === 'string') {
+          setLastSeenVersion(msg.lastSeenVersion as string);
+        }
+        if (typeof msg.extensionVersion === 'string') {
+          setExtensionVersion(msg.extensionVersion as string);
+        }
+      } else if (msg.type === 'externalAssetDirectoriesUpdated') {
+        if (Array.isArray(msg.dirs)) {
+          setExternalAssetDirectories(msg.dirs as string[]);
+        }
       } else if (msg.type === 'furnitureAssetsLoaded') {
         try {
           const catalog = msg.catalog as FurnitureAsset[];
@@ -493,5 +523,11 @@ export function useExtensionMessages(
     layoutWasReset,
     loadedAssets,
     workspaceFolders,
+    externalAssetDirectories,
+    lastSeenVersion,
+    extensionVersion,
+    watchAllSessions,
+    setWatchAllSessions,
+    alwaysShowLabels,
   };
 }

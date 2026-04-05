@@ -21,5 +21,16 @@ Thumbs.db
 .idea
 *.sw?
 
+# E2E test artifacts
+test-results/
+playwright-report/
+
+# Build artifacts
+*.map
+
 # Project-specific
 .claude/
+/sprites-export
+
+# Local notes (not for commit)
+/notes/
