@@ -34,3 +34,9 @@ playwright-report/
 
 # Local notes (not for commit)
 /notes/
+
+# Local music-generation artifacts (not for commit)
+__pycache__/
+*.pyc
+/ckpt
+output_banned.mp3
