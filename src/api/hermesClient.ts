@@ -44,7 +44,7 @@ export interface HermesMessage {
 
 // ── API calls ────────────────────────────────────────────────────────────────
 
-async function apiFetch(path: string): Promise<unknown> {
+async function apiFetch<T = unknown>(path: string): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
 
@@ -53,12 +53,14 @@ async function apiFetch(path: string): Promise<unknown> {
     const text = await res.text().catch(() => '');
     throw new Error(`API ${path} failed (${res.status}): ${text}`);
   }
-  return res.json();
+  return res.json() as Promise<T>;
 }
 
 export async function listSessions(limit = 20): Promise<HermesSession[]> {
-  const data = await apiFetch(`/api/sessions?limit=${limit}`);
-  return (data.sessions ?? []) as HermesSession[];
+  const data = await apiFetch<{ sessions?: HermesSession[] }>(
+    `/api/sessions?limit=${limit}`,
+  );
+  return data.sessions ?? [];
 }
 
 export async function getSessionMessages(
@@ -66,10 +68,10 @@ export async function getSessionMessages(
   limit = 50,
   offset = 0,
 ): Promise<HermesMessage[]> {
-  const data = await apiFetch(
+  const data = await apiFetch<{ messages?: HermesMessage[] }>(
     `/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}&offset=${offset}`,
   );
-  return (data.messages ?? []) as HermesMessage[];
+  return data.messages ?? [];
 }
 
 // ── Polling ──────────────────────────────────────────────────────────────────
